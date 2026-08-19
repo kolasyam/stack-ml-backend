@@ -30,6 +30,9 @@ export default registerAs('app', () => ({
 
   throttleTtl: parseInt(process.env.THROTTLE_TTL ?? '60', 10),
   throttleLimit: parseInt(process.env.THROTTLE_LIMIT ?? '100', 10),
+
+  openRouterApiKey: process.env.OPENROUTER_API_KEY ?? '',
+  openRouterModel: process.env.OPENROUTER_MODEL ?? 'poolside/laguna-xs-2.1:free',
 }));
 
 export interface AppConfig {
@@ -47,4 +50,6 @@ export interface AppConfig {
   logLevel: string;
   throttleTtl: number;
   throttleLimit: number;
+  openRouterApiKey?: string;
+  openRouterModel?: string;
 }

@@ -1,31 +1,97 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { AppLogger } from '../../common/logger/logger.service';
 
 /**
- * Grammarify-backed description improver.
+ * OpenRouter & Grammarify-backed description improver.
  *
- * `grammarify` (and its native `spellchecker` binding) is required *lazily* on
- * first use rather than at module load. This keeps bootstrap resilient: if the
- * native binding cannot be built/loaded in a given environment, the server still
- * starts and every other endpoint keeps working — and `/description/improve`
- * transparently falls back to a dependency-free improver so the feature still
- * returns an improved string.
+ * Uses OpenRouter AI (poolside/laguna-xs-2.1:free) as the primary engine to fix
+ * grammar, spelling, and tone. Falls back to Grammarify and local fallback if
+ * API key or network is unavailable.
  */
 @Injectable()
 export class DescriptionService {
   private grammarify: { clean: (input: string) => string } | null = null;
   private triedLoad = false;
 
-  constructor(private readonly logger: AppLogger) {}
+  constructor(
+    private readonly logger: AppLogger,
+    private readonly configService: ConfigService,
+  ) {}
 
   async improve(raw: string): Promise<string> {
     const text = (raw ?? '').trim();
     if (!text) return raw ?? '';
 
-    // Primary engine: Grammarify (local npm package, with a native spellchecker
-    // binding). If it isn't available or throws, degrade gracefully to the
-    // dependency-free fallback below so the feature always returns an improved
-    // string instead of failing.
+    // Primary engine: OpenRouter API
+    const apiKey =
+      this.configService.get<string>('app.openRouterApiKey') ||
+      process.env.OPENROUTER_API_KEY;
+    const model =
+      this.configService.get<string>('app.openRouterModel') ||
+      'poolside/laguna-xs-2.1:free';
+
+    if (apiKey) {
+      try {
+        const response = await fetch(
+          'https://openrouter.ai/api/v1/chat/completions',
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              model,
+              messages: [
+                {
+                  role: 'system',
+                  content:
+                    'You are an expert editor for an online learning platform.\n\nImprove the user\'s learning resource description.\n\nRules:\n- Fix spelling and grammar.\n- Improve sentence structure.\n- Make the description clear and professional.\n- Preserve the original meaning.\n- Do not invent facts or add information.\n- Keep it concise.\n- Return ONLY the improved description.\n- Do not use quotation marks around the answer.\n- Do not explain what you changed.',
+                },
+                {
+                  role: 'user',
+                  content: text,
+                },
+              ],
+              temperature: 0.3,
+              max_tokens: 300,
+            }),
+          },
+        );
+
+        if (response.ok) {
+          const data = (await response.json()) as {
+            choices?: { message?: { content?: string } }[];
+          };
+          let improved = data?.choices?.[0]?.message?.content?.trim();
+          if (improved) {
+            if (
+              (improved.startsWith('"') && improved.endsWith('"')) ||
+              (improved.startsWith("'") && improved.endsWith("'"))
+            ) {
+              improved = improved.slice(1, -1).trim();
+            }
+            if (improved.length > 0) {
+              return improved;
+            }
+          }
+        } else {
+          const errorText = await response.text();
+          this.logger.warn(
+            `OpenRouter API returned status ${response.status}: ${errorText}`,
+            'Description',
+          );
+        }
+      } catch (err) {
+        this.logger.warn(
+          `OpenRouter API call failed (${err instanceof Error ? err.message : String(err)}); falling back.`,
+          'Description',
+        );
+      }
+    }
+
+    // Secondary engine: Grammarify
     const grammarify = this.resolveGrammarify();
     if (grammarify) {
       try {
@@ -49,12 +115,6 @@ export class DescriptionService {
 
   /**
    * Dependency-free, safe text improvement used when Grammarify is unavailable.
-   *
-   * Performs only conservative, non-destructive transforms that are useful for a
-   * short description field: collapse whitespace, normalise spacing around
-   * punctuation, capitalise the first letter and after sentence stops, and
-   * ensure the text ends with terminal punctuation. No spellchecking — it never
-   * rewrites words, so it cannot mangle meaning.
    */
   private fallbackImprove(input: string): string {
     let text = input.replace(/\s+/g, ' ').trim();

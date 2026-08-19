@@ -31,4 +31,7 @@ export const validationSchema = Joi.object({
 
   THROTTLE_TTL: Joi.number().default(60),
   THROTTLE_LIMIT: Joi.number().default(100),
+
+  OPENROUTER_API_KEY: Joi.string().optional().allow(''),
+  OPENROUTER_MODEL: Joi.string().default('poolside/laguna-xs-2.1:free'),
 });
