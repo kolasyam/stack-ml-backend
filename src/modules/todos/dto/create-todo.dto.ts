@@ -1,4 +1,4 @@
-import { IsDate, IsIn, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsDate, IsIn, IsMongoId, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 import { Type } from 'class-transformer';
 import {
   TodoStatus,
@@ -14,14 +14,15 @@ import {
 export class CreateTodoDto {
   @IsString()
   @IsNotEmpty()
+  @MaxLength(200)
   title: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(10000)
   description?: string;
 
-  @IsString()
-  @IsNotEmpty()
+  @IsMongoId()
   resourceId: string;
 
   @IsOptional()

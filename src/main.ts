@@ -10,7 +10,17 @@ import { AppLogger } from './common/logger/logger.service';
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule, {
     bufferLogs: false,
-    rawBody: true,
+  });
+
+  // Baseline security headers without requiring a native helmet dependency.
+  // The health dashboard contains inline styles, so CSP is intentionally not
+  // set here; uploaded document HTML is sanitized in the frontend instead.
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    next();
   });
 
   // ----- Request body size limit -----
@@ -27,9 +37,6 @@ async function bootstrap(): Promise<void> {
   app.use(
     json({
       limit: '10mb',
-      verify: (req, _res, buf) => {
-        (req as unknown as { rawBody?: Buffer }).rawBody = buf;
-      },
     }),
   );
 
@@ -39,6 +46,7 @@ async function bootstrap(): Promise<void> {
     throw new Error('App configuration is missing.');
   }
   const logger = new AppLogger();
+  app.enableShutdownHooks();
 
   // ----- Global API prefix (health + docs kept at root for uptime/tooling) -----
   // Nest's prefix-exclude only matches exact controller roots (it can't exclude
@@ -57,7 +65,13 @@ async function bootstrap(): Promise<void> {
     origin: origins,
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Skip-Log'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'X-Api-Key',
+      'X-Request-Id',
+    ],
+    exposedHeaders: ['X-Request-Id'],
   });
 
   // ----- Global validation (whitelist + transform) -----
@@ -66,7 +80,7 @@ async function bootstrap(): Promise<void> {
       whitelist: true,
       transform: true,
       transformOptions: { enableImplicitConversion: true },
-      forbidNonWhitelisted: false,
+      forbidNonWhitelisted: true,
     }),
   );
 
@@ -78,13 +92,15 @@ async function bootstrap(): Promise<void> {
     )
     .setVersion('1.0')
     .setContact('syamm', '', '')
+    .addApiKey({ type: 'apiKey', name: 'X-Api-Key', in: 'header' }, 'apiKey')
+    .addSecurityRequirements('apiKey')
     .build();
   const document = SwaggerModule.createDocument(app, swagger);
   SwaggerModule.setup('docs', app, document, {
     swaggerOptions: { persistAuthorization: true },
   });
 
-  await app.listen(appConfig.port, '0.0.0.0');
+  await app.listen(appConfig.port);
   logger.log(
     `🚀 API ready on http://localhost:${appConfig.port}/${appConfig.apiPrefix}`,
   );
@@ -92,7 +108,6 @@ async function bootstrap(): Promise<void> {
 }
 
 bootstrap().catch((err) => {
-  // eslint-disable-next-line no-console
   console.error('Fatal bootstrap error', err);
   process.exit(1);
 });

@@ -22,6 +22,7 @@ export interface DashboardData {
  */
 @Injectable()
 export class StatsService {
+  private dashboardCache?: { expiresAt: number; value: DashboardData };
   constructor(
     private readonly resources: ResourcesService,
     private readonly todos: TodosService,
@@ -29,6 +30,9 @@ export class StatsService {
   ) {}
 
   async dashboard(): Promise<DashboardData> {
+    if (this.dashboardCache && this.dashboardCache.expiresAt > Date.now()) {
+      return this.dashboardCache.value;
+    }
     const [resources, currentReading, recentUploads, todos, recentTodos, notes, recentNotes] =
       await Promise.all([
         this.resources.stats(),
@@ -40,7 +44,7 @@ export class StatsService {
         this.notes.findAll({ limit: 5, sort: NoteSort.NEWEST }),
       ]);
 
-    return {
+    const value = {
       resources,
       todos,
       notes,
@@ -49,5 +53,7 @@ export class StatsService {
       recentTodos: recentTodos.items,
       recentNotes: recentNotes.items,
     };
+    this.dashboardCache = { value, expiresAt: Date.now() + 15_000 };
+    return value;
   }
 }

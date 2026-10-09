@@ -13,6 +13,7 @@ export const ResourceType = {
   YOUTUBE: 'YouTube',
   INSTAGRAM: 'Instagram',
   LINKEDIN: 'LinkedIn',
+  SUBSTACK: 'Substack',
   WEBSITE: 'Website',
   RESEARCH_PAPER: 'Research Paper',
   DOC: 'DOC',

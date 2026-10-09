@@ -3,11 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model } from 'mongoose';
 import { AppLogger } from '../../common/logger/logger.service';
 import { Paginated, paginate } from '../../common/dto/response.dto';
-import {
-  PRIORITY_RANK,
-  NoteStatus,
-  NotePriority,
-} from '../../common/constants/enums';
+import { NoteStatus, NotePriority } from '../../common/constants/enums';
 import { Note, NoteDocument } from './schemas/note.schema';
 import { CreateNoteDto } from './dto/create-note.dto';
 import { UpdateNoteDto } from './dto/update-note.dto';
@@ -47,14 +43,19 @@ export class NotesService {
     const total = await this.noteModel.countDocuments(filter);
 
     if (query.sort === NoteSort.PRIORITY) {
-      const all = await this.noteModel.find(filter).exec();
-      const sorted = [...all].sort(
-        (a, b) =>
-          (PRIORITY_RANK[b.priority ?? 'Low'] ?? 1) -
-          (PRIORITY_RANK[a.priority ?? 'Low'] ?? 1),
-      );
-      const start = (page - 1) * limit;
-      return paginate(sorted.slice(start, start + limit), total, page, limit);
+      const raw = await this.noteModel.aggregate([
+        { $match: filter },
+        { $addFields: { __priorityRank: { $switch: { branches: [
+          { case: { $eq: ['$priority', 'Critical'] }, then: 4 },
+          { case: { $eq: ['$priority', 'High'] }, then: 3 },
+          { case: { $eq: ['$priority', 'Medium'] }, then: 2 },
+          { case: { $eq: ['$priority', 'Low'] }, then: 1 },
+        ], default: 0 } } } },
+        { $sort: { __priorityRank: -1, createdAt: -1 } },
+        { $skip: (page - 1) * limit }, { $limit: limit },
+        { $project: { __priorityRank: 0 } },
+      ]).exec();
+      return paginate(raw.map((item) => this.noteModel.hydrate(item)), total, page, limit);
     }
 
     const sort = this.buildSort(query.sort);
@@ -118,12 +119,9 @@ export class NotesService {
   // --------------------------- helpers ---------------------------
 
   async findByIdOrThrow(id: string): Promise<NoteDocument> {
-    let doc: NoteDocument | null;
-    try {
-      doc = await this.noteModel.findById(id).exec();
-    } catch {
-      throw new NotFoundException(`Note "${id}" not found.`);
-    }
+    const { Types } = await import('mongoose');
+    if (!Types.ObjectId.isValid(id)) throw new NotFoundException(`Note "${id}" not found.`);
+    const doc = await this.noteModel.findById(id).exec();
     if (!doc) throw new NotFoundException(`Note "${id}" not found.`);
     return doc;
   }
@@ -131,7 +129,7 @@ export class NotesService {
   private buildFilter(query: QueryNoteDto): FilterQuery<NoteDocument> {
     const filter: FilterQuery<NoteDocument> = {};
     if (query.search) {
-      filter.$text = { $search: query.search };
+      filter.$text = { $search: query.search.replace(/"/g, ' ').trim() };
     }
     if (query.status) filter.status = query.status;
     if (query.priority) filter.priority = query.priority;

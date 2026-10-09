@@ -55,16 +55,24 @@ export class DescriptionService {
                 },
               ],
               temperature: 0.3,
-              max_tokens: 300,
+              max_tokens: 1000,
             }),
           },
         );
 
         if (response.ok) {
           const data = (await response.json()) as {
-            choices?: { message?: { content?: string } }[];
+            choices?: { message?: { content?: string, reasoning?: string } }[];
           };
-          let improved = data?.choices?.[0]?.message?.content?.trim();
+          
+          const message = data?.choices?.[0]?.message;
+          let improved = message?.content?.trim();
+          
+          // If using a reasoning model and it hit max_tokens before writing content,
+          // it might only have reasoning available. Or it might have output it in reasoning.
+          if (!improved && message?.reasoning) {
+            improved = message.reasoning.trim();
+          }
           if (improved) {
             if (
               (improved.startsWith('"') && improved.endsWith('"')) ||
@@ -134,7 +142,7 @@ export class DescriptionService {
     if (this.triedLoad) return this.grammarify;
     this.triedLoad = true;
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       this.grammarify = require('grammarify');
     } catch (err) {
       this.grammarify = null;

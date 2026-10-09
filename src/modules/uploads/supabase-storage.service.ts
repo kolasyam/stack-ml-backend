@@ -1,7 +1,10 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { createHash } from 'crypto';
+import { randomUUID } from 'crypto';
+import { createReadStream, existsSync, promises as fs } from 'fs';
+import { join } from 'path';
+import { Worker } from 'worker_threads';
 import pdfParse from 'pdf-parse';
 import mammoth from 'mammoth';
 import { AppConfig } from '../../config/configuration';
@@ -13,10 +16,10 @@ export interface UploadResult {
   fileSize: number;
   fileType: string;
   mimeType: string;
-  signedUrl: string;
   pages?: number;
   /** Extracted plain text (capped) for in-document search + content index. */
   extractedText?: string;
+  extractionStatus: 'completed' | 'skipped' | 'failed' | 'not-applicable';
 }
 
 /** Connectivity probe result shared by the health endpoint. */
@@ -43,6 +46,10 @@ export interface ComponentStatus {
 export class SupabaseStorageService {
   private client: SupabaseClient | null = null;
   private readonly TEXT_CAP = 1_000_000; // ~1MB of indexed text is plenty for search
+  private readonly MAX_CONCURRENT_EXTRACTIONS = 2;
+  private readonly MAX_QUEUED_EXTRACTIONS = 4;
+  private activeExtractions = 0;
+  private extractionWaiters: Array<() => void> = [];
 
   constructor(private readonly config: ConfigService) {}
 
@@ -81,10 +88,7 @@ export class SupabaseStorageService {
     const now = new Date();
     const y = now.getUTCFullYear();
     const m = String(now.getUTCMonth() + 1).padStart(2, '0');
-    const uuid = createHash('sha1')
-      .update(`${Date.now()}-${Math.random()}-${originalName}`)
-      .digest('hex')
-      .slice(0, 16);
+    const uuid = randomUUID();
     return `uploads/${y}/${m}/${uuid}-${safe}`;
   }
 
@@ -93,12 +97,33 @@ export class SupabaseStorageService {
     originalName: string,
     mimeType: string,
   ): Promise<UploadResult> {
+    return this.uploadBody(buffer, originalName, mimeType, buffer.length, buffer);
+  }
+
+  async uploadFile(
+    filePath: string,
+    originalName: string,
+    mimeType: string,
+    fileSize: number,
+  ): Promise<UploadResult> {
+    const stream = createReadStream(filePath);
+    return this.uploadBody(stream as unknown as Buffer, originalName, mimeType, fileSize, undefined, filePath);
+  }
+
+  private async uploadBody(
+    body: Buffer,
+    originalName: string,
+    mimeType: string,
+    fileSize: number,
+    extractionBuffer?: Buffer,
+    sourcePath?: string,
+  ): Promise<UploadResult> {
     const path = this.buildPath(originalName);
     const client = this.getClient();
 
     const { error } = await client.storage
       .from(this.bucket)
-      .upload(path, buffer, {
+      .upload(path, body, {
         contentType: mimeType,
         cacheControl: '3600',
         upsert: false,
@@ -113,28 +138,45 @@ export class SupabaseStorageService {
     const fileType = (originalName.split('.').pop() ?? 'file')
       .toLowerCase();
 
-    // Extract content (page count + text) to power the reader + search.
-    const extracted = await this.extractContent(buffer, fileType);
-
-    const signedUrl = await this.createSignedUrl(path);
-
-    return {
-      path,
-      fileName: originalName,
-      fileSize: buffer.length,
-      fileType,
-      mimeType,
-      signedUrl,
-      ...extracted,
-    };
+    try {
+      // Extract content (page count + text) to power the reader + search.
+      // Large files are intentionally stored without parsing. This protects
+      // the request process until extraction moves behind a durable worker.
+      const maxExtractionBytes = (this.config.get<AppConfig>('app')?.maxExtractionSizeMb ?? 20) * 1024 * 1024;
+      const bytesForExtraction = extractionBuffer ??
+        (sourcePath && fileSize <= maxExtractionBytes ? await fs.readFile(sourcePath) : undefined);
+      const extracted = bytesForExtraction
+        ? await this.extractContent(bytesForExtraction, fileType)
+        : { status: 'skipped' as const };
+      return {
+        path,
+        fileName: originalName,
+        fileSize,
+        fileType,
+        mimeType,
+        extractionStatus: extracted.status,
+        pages: extracted.pages,
+        extractedText: extracted.extractedText,
+      };
+    } catch (error) {
+      // Storage succeeded but metadata preparation failed. Best-effort cleanup
+      // prevents a file that the application can no longer reference.
+      try {
+        await this.remove(path);
+      } catch {
+        // Preserve the original failure; a cleanup retry can be added later.
+      }
+      throw error;
+    }
   }
 
   /** Generate a short-lived signed URL for reading / previewing. */
-  async createSignedUrl(path: string, expiresIn = 3600): Promise<string> {
+  async createSignedUrl(path: string, expiresIn = 3600, download = false): Promise<string> {
+    this.assertSafePath(path);
     const client = this.getClient();
     const { data, error } = await client.storage
       .from(this.bucket)
-      .createSignedUrl(path, expiresIn);
+      .createSignedUrl(path, expiresIn, download ? { download: true } : undefined);
     if (error || !data?.signedUrl) {
       throw new ServiceUnavailableException(
         `Could not create signed URL: ${error?.message ?? 'unknown error'}`,
@@ -167,15 +209,16 @@ export class SupabaseStorageService {
       const client = this.getClient();
       const { error } = await client.storage.listBuckets();
       if (error) {
-        return { ok: false, configured: true, message: `Error: ${error.message}` };
+        return { ok: false, configured: true, message: 'Supabase Storage is unavailable' };
       }
       return { ok: true, configured: true, message: 'Connected to Supabase Storage' };
-    } catch (err) {
-      return { ok: false, configured: true, message: (err as Error).message };
+    } catch {
+      return { ok: false, configured: true, message: 'Supabase Storage is unavailable' };
     }
   }
 
   async remove(path: string): Promise<void> {
+    this.assertSafePath(path);
     const client = this.getClient();
     const { error } = await client.storage.from(this.bucket).remove([path]);
     if (error) {
@@ -186,34 +229,159 @@ export class SupabaseStorageService {
     }
   }
 
+  /** Public validation for other modules persisting a storage reference. */
+  isSafeStoragePath(path: string): boolean {
+    return (
+      path.length <= 512 &&
+      /^uploads\/[A-Za-z0-9._/-]+$/.test(path) &&
+      !path.includes('..') &&
+      path.split('/').every((segment) => segment.length > 0 && segment !== '.') &&
+      !path.endsWith('/')
+    );
+  }
+
+  private assertSafePath(path: string): void {
+    if (!path || !this.isSafeStoragePath(path)) {
+      throw new ServiceUnavailableException('Invalid storage path.');
+    }
+  }
+
   /** Read page count + text from a document buffer. Never throws. */
   private async extractContent(
     buffer: Buffer,
     fileType: string,
-  ): Promise<{ pages?: number; extractedText?: string }> {
+  ): Promise<{
+    pages?: number;
+    extractedText?: string;
+    status: UploadResult['extractionStatus'];
+  }> {
+    const maxExtractionMb = this.config.get<AppConfig>('app')?.maxExtractionSizeMb ?? 20;
+    if (buffer.length > maxExtractionMb * 1024 * 1024) {
+      return { status: 'skipped' };
+    }
+    await this.acquireExtractionSlot();
+    try {
+      const workerPath = join(__dirname, 'document-extractor.worker.js');
+      if (existsSync(workerPath)) {
+        return await this.extractInWorker(buffer, fileType, workerPath);
+      }
+      return await this.extractInProcess(buffer, fileType);
+    } finally {
+      this.releaseExtractionSlot();
+    }
+  }
+
+  private acquireExtractionSlot(): Promise<void> {
+    if (this.activeExtractions < this.MAX_CONCURRENT_EXTRACTIONS) {
+      this.activeExtractions += 1;
+      return Promise.resolve();
+    }
+    if (this.extractionWaiters.length >= this.MAX_QUEUED_EXTRACTIONS) {
+      throw new ServiceUnavailableException(
+        'Document extraction is busy. Please retry the upload shortly.',
+      );
+    }
+    return new Promise((resolve) => {
+      this.extractionWaiters.push(resolve);
+    });
+  }
+
+  private releaseExtractionSlot(): void {
+    const next = this.extractionWaiters.shift();
+    if (next) next();
+    else this.activeExtractions = Math.max(0, this.activeExtractions - 1);
+  }
+
+  /** Parse outside the NestJS event loop so one document cannot stall requests. */
+  private extractInWorker(
+    buffer: Buffer,
+    fileType: string,
+    workerPath: string,
+  ): Promise<{
+    pages?: number;
+    extractedText?: string;
+    status: UploadResult['extractionStatus'];
+  }> {
+    const transferable = new Uint8Array(buffer.length);
+    transferable.set(buffer);
+    return new Promise((resolve) => {
+      let settled = false;
+      const worker = new Worker(workerPath, {
+        workerData: {
+          buffer: transferable.buffer,
+          fileType,
+          textCap: this.TEXT_CAP,
+        },
+        transferList: [transferable.buffer],
+      });
+      const finish = (result: {
+        pages?: number;
+        extractedText?: string;
+        status: UploadResult['extractionStatus'];
+      }) => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
+      const timer = setTimeout(() => {
+        void worker.terminate();
+        finish({ status: 'failed' });
+      }, 60_000);
+      worker.once('message', (result) => {
+        clearTimeout(timer);
+        finish(result);
+      });
+      worker.once('error', () => {
+        clearTimeout(timer);
+        finish({ status: 'failed' });
+      });
+      worker.once('exit', (code) => {
+        clearTimeout(timer);
+        if (code !== 0) finish({ status: 'failed' });
+      });
+    });
+  }
+
+  /** Development/test fallback when the worker has not been compiled yet. */
+  private async extractInProcess(
+    buffer: Buffer,
+    fileType: string,
+  ): Promise<{
+    pages?: number;
+    extractedText?: string;
+    status: UploadResult['extractionStatus'];
+  }> {
     try {
       if (fileType === 'pdf') {
-        const parsed = await pdfParse(buffer);
+        const parsed = await pdfParse(buffer, {
+          pagerender: async function (pageData: any) {
+            const textContent = await pageData.getTextContent();
+            const text = textContent.items.map((item: any) => item.str).join(' ');
+            return text + '\f';
+          },
+        });
         return {
           pages: parsed.numpages,
           extractedText: this.capText(parsed.text),
+          status: 'completed',
         };
       }
       if (fileType === 'doc' || fileType === 'docx') {
         const { value } = await mammoth.extractRawText({ buffer });
-        return { extractedText: this.capText(value) };
+        return { extractedText: this.capText(value), status: 'completed' };
       }
     } catch (err) {
       // Content extraction is best-effort; the file is still uploaded.
-      // eslint-disable-next-line no-console
       console.warn('Content extraction failed:', (err as Error).message);
+      return { status: 'failed' };
     }
-    return {};
+      return { status: 'not-applicable' };
   }
 
   private capText(text: string): string | undefined {
     if (!text) return undefined;
-    const trimmed = text.replace(/\s+/g, ' ').trim();
+    // Compress whitespace but preserve form-feeds (\f) which mark page boundaries
+    const trimmed = text.replace(/[^\S\f]+/g, ' ').trim();
     return trimmed.length > this.TEXT_CAP
       ? trimmed.slice(0, this.TEXT_CAP)
       : trimmed;

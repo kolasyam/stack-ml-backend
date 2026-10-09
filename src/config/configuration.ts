@@ -12,6 +12,7 @@ export default registerAs('app', () => ({
   port: parseInt(process.env.PORT ?? '5000', 10),
   apiPrefix: process.env.API_PREFIX ?? 'api/v1',
   corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:3000',
+  authApiKey: process.env.AUTH_API_KEY ?? '',
 
   mongoUri: process.env.MONGODB_URI,
   mongoDbName: process.env.MONGODB_DB_NAME ?? 'ml_knowledge_hub',
@@ -21,6 +22,13 @@ export default registerAs('app', () => ({
   supabaseBucket: process.env.SUPABASE_BUCKET_NAME ?? 'resources',
 
   maxFileSizeMb: parseInt(process.env.MAX_FILE_SIZE_MB ?? '100', 10),
+  // Extraction is deliberately capped independently from upload size. A user
+  // can still store/read a large document, but the API will not attempt to
+  // parse an unbounded buffer during the request.
+  maxExtractionSizeMb: parseInt(
+    process.env.MAX_EXTRACTION_SIZE_MB ?? '20',
+    10,
+  ),
   allowedFileTypes: (process.env.ALLOWED_FILE_TYPES ?? 'pdf,doc,docx')
     .split(',')
     .map((s) => s.trim().toLowerCase())
@@ -40,12 +48,14 @@ export interface AppConfig {
   port: number;
   apiPrefix: string;
   corsOrigin: string;
+  authApiKey: string;
   mongoUri?: string;
   mongoDbName: string;
   supabaseUrl?: string;
   supabaseServiceRoleKey?: string;
   supabaseBucket: string;
   maxFileSizeMb: number;
+  maxExtractionSizeMb: number;
   allowedFileTypes: string[];
   logLevel: string;
   throttleTtl: number;

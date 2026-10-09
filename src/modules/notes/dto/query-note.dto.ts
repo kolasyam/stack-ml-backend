@@ -1,4 +1,4 @@
-import { IsIn, IsOptional, IsString } from 'class-validator';
+import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
 import { NoteStatus, NotePriority } from '../../../common/constants/enums';
 
@@ -14,6 +14,7 @@ export type NoteSort = (typeof NoteSort)[keyof typeof NoteSort];
 export class QueryNoteDto extends PaginationQueryDto {
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   search?: string;
 
   @IsOptional()
@@ -26,6 +27,7 @@ export class QueryNoteDto extends PaginationQueryDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   projectName?: string;
 
   @IsOptional()

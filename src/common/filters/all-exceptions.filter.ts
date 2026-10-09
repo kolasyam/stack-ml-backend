@@ -35,9 +35,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
       exception instanceof HttpException
         ? (exception.getResponse() as { message?: string } | string)
         : 'Internal server error';
+    const requestId = (request as Request & { requestId?: string }).requestId;
 
     this.logger.error(
-      `Unhandled error on ${request.method} ${request.url}`,
+      `[${requestId ?? 'no-request-id'}] Unhandled error on ${request.method} ${request.url}`,
       exception instanceof Error ? exception.stack : String(exception),
       'AllExceptionsFilter',
     );
@@ -48,6 +49,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       path: request.url,
       method: request.method,
       timestamp: new Date().toISOString(),
+      requestId,
       error: 'InternalServerError',
       message:
         typeof message === 'string'

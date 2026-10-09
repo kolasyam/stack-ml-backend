@@ -38,3 +38,7 @@ export const toArray = (value: unknown): string[] | undefined => {
     new Set(String(value).split(',').map((v) => v.trim()).filter(Boolean)),
   );
 };
+
+/** Escape user input before placing it in a Mongo regular expression. */
+export const escapeRegex = (value: string): string =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

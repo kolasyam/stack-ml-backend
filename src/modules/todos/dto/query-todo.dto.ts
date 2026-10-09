@@ -1,4 +1,4 @@
-import { IsIn, IsOptional, IsString } from 'class-validator';
+import { IsIn, IsMongoId, IsOptional, IsString, MaxLength } from 'class-validator';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
 import { TodoStatus, ResourcePriority } from '../../../common/constants/enums';
 
@@ -15,6 +15,7 @@ export type TodoSort = (typeof TodoSort)[keyof typeof TodoSort];
 export class QueryTodoDto extends PaginationQueryDto {
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   search?: string;
 
   @IsOptional()
@@ -26,7 +27,7 @@ export class QueryTodoDto extends PaginationQueryDto {
   priority?: ResourcePriority;
 
   @IsOptional()
-  @IsString()
+  @IsMongoId()
   resourceId?: string;
 
   @IsOptional()

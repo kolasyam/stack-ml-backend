@@ -18,7 +18,7 @@ import { SuccessResponse } from '../dto/response.dto';
  * - Streams / already-sent responses are passed through untouched.
  */
 @Injectable()
-export class ResponseInterceptor<T> implements NestInterceptor {
+export class ResponseInterceptor implements NestInterceptor {
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     const ctx = context.switchToHttp();
     const request = ctx.getRequest<Request>();
@@ -39,6 +39,7 @@ export class ResponseInterceptor<T> implements NestInterceptor {
         }
 
         const timestamp = new Date().toISOString();
+        const requestId = (request as Request & { requestId?: string }).requestId;
         if (data instanceof SuccessResponse) {
           return {
             success: true,
@@ -46,6 +47,7 @@ export class ResponseInterceptor<T> implements NestInterceptor {
             message: data.message,
             timestamp,
             path: request.url,
+            requestId,
           };
         }
 
@@ -54,6 +56,7 @@ export class ResponseInterceptor<T> implements NestInterceptor {
           data,
           timestamp,
           path: request.url,
+          requestId,
         };
       }),
     );

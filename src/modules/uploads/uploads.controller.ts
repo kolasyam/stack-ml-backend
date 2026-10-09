@@ -10,6 +10,11 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { mkdirSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { randomUUID } from 'crypto';
 import { ApiBody, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AppLogger } from '../../common/logger/logger.service';
 import { SuccessResponse } from '../../common/dto/response.dto';
@@ -43,6 +48,17 @@ export class UploadsController {
   })
   @UseInterceptors(
     FileInterceptor('file', {
+      storage: diskStorage({
+        destination: (() => {
+          const directory = join(tmpdir(), 'stackml-uploads');
+          mkdirSync(directory, { recursive: true });
+          return directory;
+        })(),
+        filename: (_req, file, callback) => {
+          const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120);
+          callback(null, `${randomUUID()}-${safeName}`);
+        },
+      }),
       // Enforced server-side as a hard ceiling regardless of client checks.
       limits: {
         fileSize:

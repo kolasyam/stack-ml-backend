@@ -32,6 +32,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       typeof body === 'string'
         ? body
         : (body.message ?? exception.message);
+    const requestId = (request as Request & { requestId?: string }).requestId;
 
     const errorResponse = {
       success: false,
@@ -39,13 +40,14 @@ export class HttpExceptionFilter implements ExceptionFilter {
       path: request.url,
       method: request.method,
       timestamp: new Date().toISOString(),
+      requestId,
       error: typeof body === 'object' ? body.error : exception.name,
       message,
     };
 
     if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
       this.logger.error(
-        `${request.method} ${request.url} -> ${status}`,
+        `[${requestId ?? 'no-request-id'}] ${request.method} ${request.url} -> ${status}`,
         exception.stack,
         'HttpExceptionFilter',
       );

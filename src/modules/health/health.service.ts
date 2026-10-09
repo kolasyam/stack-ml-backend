@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectConnection } from '@nestjs/mongoose';
 import { Connection } from 'mongoose';
 import { AppLogger } from '../../common/logger/logger.service';
@@ -24,7 +24,8 @@ export interface SystemStatus {
  * timeout so startup is never blocked indefinitely.
  */
 @Injectable()
-export class HealthService implements OnModuleInit {
+export class HealthService implements OnModuleInit, OnModuleDestroy {
+  private refreshTimer?: NodeJS.Timeout;
   private mongodb: ComponentStatus = {
     ok: false,
     configured: true,
@@ -43,9 +44,16 @@ export class HealthService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    this.mongodb = await this.checkMongo();
-    this.supabase = await this.storage.healthCheck();
+    await this.refresh();
+    // Keep readiness data fresh after startup so a later outage is not
+    // reported as healthy forever. Probes are capped by their own timeout.
+    this.refreshTimer = setInterval(() => void this.refresh(), 30_000);
+    this.refreshTimer.unref?.();
     this.printBanner();
+  }
+
+  onModuleDestroy(): void {
+    if (this.refreshTimer) clearInterval(this.refreshTimer);
   }
 
   /** Snapshot of the last probe (safe to call any time after boot). */
@@ -71,9 +79,18 @@ export class HealthService implements OnModuleInit {
       if (!db) throw new Error('Mongoose connection has no db handle');
       await this.withTimeout(db.admin().ping(), 5000, 'MongoDB');
       return { ok: true, configured: true, message: 'Connected to MongoDB' };
-    } catch (err) {
-      return { ok: false, configured: true, message: (err as Error).message };
+    } catch {
+      return { ok: false, configured: true, message: 'MongoDB is unavailable' };
     }
+  }
+
+  private async refresh(): Promise<void> {
+    const [mongodb, supabase] = await Promise.all([
+      this.checkMongo(),
+      this.storage.healthCheck(),
+    ]);
+    this.mongodb = mongodb;
+    this.supabase = supabase;
   }
 
   private withTimeout<T>(

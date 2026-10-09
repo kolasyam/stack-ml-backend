@@ -3,9 +3,11 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { Resource, ResourceSchema } from './schemas/resource.schema';
 import { ResourcesController } from './resources.controller';
 import { ResourcesService } from './resources.service';
+import { UploadsModule } from '../uploads/uploads.module';
 
 @Module({
   imports: [
+    UploadsModule,
     MongooseModule.forFeature([
       { name: Resource.name, schema: ResourceSchema },
     ]),

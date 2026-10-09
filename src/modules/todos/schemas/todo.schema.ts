@@ -18,14 +18,14 @@ import {
   collection: 'todos',
   toJSON: {
     virtuals: true,
-    transform: (_doc, ret: any) => {
+    transform: (_doc, ret: Record<string, unknown>) => {
       delete ret._id;
       delete ret.__v;
     },
   },
   toObject: {
     virtuals: true,
-    transform: (_doc, ret: any) => {
+    transform: (_doc, ret: Record<string, unknown>) => {
       delete ret._id;
       delete ret.__v;
     },
@@ -72,3 +72,4 @@ export class Todo {
 
 export type TodoDocument = HydratedDocument<Todo>;
 export const TodoSchema = SchemaFactory.createForClass(Todo);
+TodoSchema.index({ priority: 1, createdAt: -1 });

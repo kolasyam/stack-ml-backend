@@ -45,21 +45,35 @@ export interface Highlight {
   collection: 'resources',
   toJSON: {
     virtuals: true,
-    transform: (_doc, ret: any) => {
+    transform: (_doc, ret: Record<string, unknown>) => {
       delete ret._id;
       delete ret.__v;
+      delete ret.fileUrl;
       // `extractedText` is `select: false`: keep it out of serialised
       // responses so large documents never ship their full text to clients
       // (it exists only for the text index + server-side search).
       delete ret.extractedText;
+      
+      if (ret.link && (!ret.links || !Array.isArray(ret.links) || ret.links.length === 0)) {
+        ret.links = [ret.link];
+      } else if (!ret.links) {
+        ret.links = [];
+      }
     },
   },
   toObject: {
     virtuals: true,
-    transform: (_doc, ret: any) => {
+    transform: (_doc, ret: Record<string, unknown>) => {
       delete ret._id;
       delete ret.__v;
+      delete ret.fileUrl;
       delete ret.extractedText;
+
+      if (ret.link && (!ret.links || !Array.isArray(ret.links) || ret.links.length === 0)) {
+        ret.links = [ret.link];
+      } else if (!ret.links) {
+        ret.links = [];
+      }
     },
   },
 })
@@ -76,8 +90,11 @@ export class Resource {
   @Prop({ trim: true })
   link?: string;
 
+  @Prop({ type: [String], default: [] })
+  links: string[];
+
   // ---- File metadata (actual bytes live in Supabase) ----
-  @Prop()
+  @Prop({ select: false })
   fileUrl?: string;
 
   @Prop({ index: true })
@@ -185,3 +202,5 @@ ResourceSchema.index({
   fileName: 'text',
   extractedText: 'text',
 });
+ResourceSchema.index({ readingProgress: -1, updatedAt: -1 });
+ResourceSchema.index({ priority: 1, createdAt: -1 });

@@ -1,4 +1,4 @@
-import { IsIn, IsOptional, IsString } from 'class-validator';
+import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
 import {
   ResourceType,
@@ -16,6 +16,7 @@ import {
 export class QueryResourceDto extends PaginationQueryDto {
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   search?: string;
 
   @IsOptional()
@@ -31,11 +32,12 @@ export class QueryResourceDto extends PaginationQueryDto {
   status?: ResourceStatus;
 
   @IsOptional()
-  @IsString()
+  @IsIn(['true', 'false', '1', '0'])
   favorite?: string; // 'true' | 'false'
 
   @IsOptional()
   @IsString()
+  @MaxLength(1000)
   tags?: string; // comma-separated
 
   @IsOptional()

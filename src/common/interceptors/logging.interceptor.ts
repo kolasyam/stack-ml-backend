@@ -7,11 +7,12 @@ import {
 import { Observable } from 'rxjs';
 import { tap } from 'rxjs/operators';
 import { Request, Response } from 'express';
+import { randomUUID } from 'crypto';
 import { AppLogger } from '../logger/logger.service';
 
 /**
  * Logs inbound requests and outbound responses with latency.
- * Respects a `X-Skip-Log` header so noisy health/poll endpoints can opt out.
+ * Every request is logged so callers cannot suppress audit records.
  */
 @Injectable()
 export class LoggingInterceptor implements NestInterceptor {
@@ -22,9 +23,15 @@ export class LoggingInterceptor implements NestInterceptor {
     const request = ctx.getRequest<Request>();
     const response = ctx.getResponse<Response>();
 
-    if (request.headers['x-skip-log'] === 'true') {
-      return next.handle();
-    }
+    // Accept a caller-provided correlation id for end-to-end tracing, but do
+    // not trust arbitrary values or allow unbounded header data into logs.
+    const incomingId = request.header('x-request-id');
+    const requestId =
+      incomingId && /^[A-Za-z0-9._:-]{1,128}$/.test(incomingId)
+        ? incomingId
+        : randomUUID();
+    response.setHeader('x-request-id', requestId);
+    (request as Request & { requestId?: string }).requestId = requestId;
 
     const now = Date.now();
     const { method, url } = request;
@@ -34,14 +41,14 @@ export class LoggingInterceptor implements NestInterceptor {
         next: () => {
           const latency = Date.now() - now;
           this.logger.log(
-            `${method} ${url} ${response.statusCode} ${latency}ms`,
+            `[${requestId}] ${method} ${url} ${response.statusCode} ${latency}ms`,
             'Request',
           );
         },
         error: (err) => {
           const latency = Date.now() - now;
           this.logger.error(
-            `${method} ${url} failed in ${latency}ms`,
+            `[${requestId}] ${method} ${url} failed in ${latency}ms`,
             err?.stack,
             'Request',
           );

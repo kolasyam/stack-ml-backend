@@ -4,10 +4,8 @@ import { OnEvent } from '@nestjs/event-emitter';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { AppLogger } from '../../common/logger/logger.service';
 import { Paginated, paginate } from '../../common/dto/response.dto';
-import {
-  PRIORITY_RANK,
-  TodoStatus,
-} from '../../common/constants/enums';
+import { escapeRegex } from '../../common/dto/pagination.dto';
+import { TodoStatus } from '../../common/constants/enums';
 import { ResourcesService } from '../resources/resources.service';
 import { Todo, TodoDocument } from './schemas/todo.schema';
 import { CreateTodoDto } from './dto/create-todo.dto';
@@ -61,23 +59,27 @@ export class TodosService {
     const total = await this.todoModel.countDocuments(filter);
 
     if (query.sort === TodoSort.PRIORITY) {
-      const all = await this.todoModel
-        .find(filter)
-        .populate('resourceId', 'title type status filePath fileUrl currentPage')
-        .exec();
-      const sorted = [...all].sort(
-        (a, b) =>
-          (PRIORITY_RANK[b.priority ?? 'Low'] ?? 1) -
-          (PRIORITY_RANK[a.priority ?? 'Low'] ?? 1),
-      );
-      const start = (page - 1) * limit;
-      return paginate(sorted.slice(start, start + limit), total, page, limit);
+      const raw = await this.todoModel.aggregate([
+        { $match: filter },
+        { $addFields: { __priorityRank: { $switch: { branches: [
+          { case: { $eq: ['$priority', 'Critical'] }, then: 4 },
+          { case: { $eq: ['$priority', 'High'] }, then: 3 },
+          { case: { $eq: ['$priority', 'Medium'] }, then: 2 },
+          { case: { $eq: ['$priority', 'Low'] }, then: 1 },
+        ], default: 0 } } } },
+        { $sort: { __priorityRank: -1, createdAt: -1 } },
+        { $skip: (page - 1) * limit }, { $limit: limit },
+        { $project: { __priorityRank: 0 } },
+      ]).exec();
+      const items = raw.map((item) => this.todoModel.hydrate(item));
+      await this.todoModel.populate(items, { path: 'resourceId', select: 'title type status filePath currentPage' });
+      return paginate(items, total, page, limit);
     }
 
     const sort = this.buildSort(query.sort);
     const items = await this.todoModel
       .find(filter)
-      .populate('resourceId', 'title type status filePath fileUrl currentPage')
+      .populate('resourceId', 'title type status filePath currentPage')
       .sort(sort)
       .skip((page - 1) * limit)
       .limit(limit)
@@ -97,6 +99,8 @@ export class TodosService {
     Object.assign(todo, dto);
     if (todo.status === TodoStatus.COMPLETED && !todo.completedAt) {
       todo.completedAt = new Date();
+    } else if (todo.status !== TodoStatus.COMPLETED) {
+      todo.completedAt = undefined;
     }
     return todo.save();
   }
@@ -111,6 +115,7 @@ export class TodosService {
   async start(id: string): Promise<TodoDocument> {
     const todo = await this.findByIdOrThrow(id);
     todo.status = TodoStatus.STUDYING;
+    todo.completedAt = undefined;
     return todo.save();
   }
 
@@ -186,12 +191,8 @@ export class TodosService {
   // --------------------------- helpers ---------------------------
 
   async findByIdOrThrow(id: string): Promise<TodoDocument> {
-    let doc: TodoDocument | null;
-    try {
-      doc = await this.todoModel.findById(id).exec();
-    } catch {
-      throw new NotFoundException(`Todo "${id}" not found.`);
-    }
+    if (!Types.ObjectId.isValid(id)) throw new NotFoundException(`Todo "${id}" not found.`);
+    const doc = await this.todoModel.findById(id).exec();
     if (!doc) throw new NotFoundException(`Todo "${id}" not found.`);
     return doc;
   }
@@ -200,13 +201,13 @@ export class TodosService {
     const filter: FilterQuery<TodoDocument> = {};
     if (query.search) {
       filter.$or = [
-        { title: { $regex: query.search, $options: 'i' } },
-        { description: { $regex: query.search, $options: 'i' } },
+        { title: { $regex: escapeRegex(query.search), $options: 'i' } },
+        { description: { $regex: escapeRegex(query.search), $options: 'i' } },
       ];
     }
     if (query.status) filter.status = query.status;
     if (query.priority) filter.priority = query.priority;
-    if (query.resourceId && Types.ObjectId.isValid(query.resourceId)) {
+    if (query.resourceId) {
       filter.resourceId = new Types.ObjectId(query.resourceId);
     }
     return filter;

@@ -13,14 +13,14 @@ import { NotePriority, NoteStatus } from '../../../common/constants/enums';
   collection: 'notes',
   toJSON: {
     virtuals: true,
-    transform: (_doc, ret: any) => {
+    transform: (_doc, ret: Record<string, unknown>) => {
       delete ret._id;
       delete ret.__v;
     },
   },
   toObject: {
     virtuals: true,
-    transform: (_doc, ret: any) => {
+    transform: (_doc, ret: Record<string, unknown>) => {
       delete ret._id;
       delete ret.__v;
     },
@@ -64,3 +64,4 @@ export type NoteDocument = HydratedDocument<Note>;
 export const NoteSchema = SchemaFactory.createForClass(Note);
 
 NoteSchema.index({ taskName: 'text', taskDescription: 'text', projectName: 'text' });
+NoteSchema.index({ priority: 1, createdAt: -1 });

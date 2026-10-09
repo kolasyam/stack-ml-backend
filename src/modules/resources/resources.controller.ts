@@ -50,8 +50,9 @@ export class ResourcesController {
   @ApiOperation({ summary: 'Get a signed URL for the resource file' })
   async fileUrl(
     @Param('id') id: string,
+    @Query('download') download?: string,
   ): Promise<SuccessResponse<{ url: string }>> {
-    const url = await this.resources.getFileUrl(id);
+    const url = await this.resources.getFileUrl(id, download === 'true');
     return new SuccessResponse(url);
   }
 
@@ -62,6 +63,16 @@ export class ResourcesController {
   ): Promise<SuccessResponse<unknown>> {
     const resource = await this.resources.findOne(id);
     return new SuccessResponse(resource);
+  }
+
+  @Get(':id/search')
+  @ApiOperation({ summary: 'Search extracted text for page numbers' })
+  async searchDocument(
+    @Param('id') id: string,
+    @Query('q') q: string,
+  ): Promise<SuccessResponse<{ pages: number[] }>> {
+    const result = await this.resources.searchDocument(id, q);
+    return new SuccessResponse(result);
   }
 
   @Patch(':id')
@@ -79,9 +90,9 @@ export class ResourcesController {
   async updateProgress(
     @Param('id') id: string,
     @Body() dto: UpdateProgressDto,
-  ): Promise<SuccessResponse<unknown>> {
-    const resource = await this.resources.updateProgress(id, dto);
-    return new SuccessResponse(resource);
+  ): Promise<SuccessResponse<{ id: string }>> {
+    const result = await this.resources.updateProgress(id, dto);
+    return new SuccessResponse(result);
   }
 
   @Patch(':id/favorite')

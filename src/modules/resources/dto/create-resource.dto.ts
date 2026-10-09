@@ -1,4 +1,5 @@
 import {
+  ArrayMaxSize,
   IsArray,
   IsBoolean,
   IsIn,
@@ -9,6 +10,7 @@ import {
   IsString,
   IsUrl,
   Min,
+  MaxLength,
 } from 'class-validator';
 import {
   ResourceType,
@@ -25,10 +27,12 @@ import {
 export class CreateResourceDto {
   @IsString()
   @IsNotEmpty()
+  @MaxLength(300)
   title: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(10000)
   description?: string;
 
   @IsIn(Object.values(ResourceType))
@@ -36,20 +40,27 @@ export class CreateResourceDto {
 
   @IsOptional()
   @IsString()
-  @IsUrl({ require_tld: false })
+  @MaxLength(2048)
+  @IsUrl({ require_tld: false, protocols: ['http', 'https'], require_protocol: true })
   link?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsString({ each: true })
+  @IsUrl({ require_tld: false, protocols: ['http', 'https'], require_protocol: true }, { each: true })
+  @MaxLength(2048, { each: true })
+  links?: string[];
 
   // File metadata (supplied by Uploads endpoint when a document was uploaded)
   @IsOptional()
   @IsString()
-  fileUrl?: string;
-
-  @IsOptional()
-  @IsString()
+  @MaxLength(512)
   filePath?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(255)
   fileName?: string;
 
   @IsOptional()
@@ -59,6 +70,7 @@ export class CreateResourceDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   fileType?: string;
 
   @IsOptional()
@@ -68,11 +80,14 @@ export class CreateResourceDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(1000000)
   extractedText?: string;
 
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(50)
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
   tags?: string[];
 
   @IsOptional()
